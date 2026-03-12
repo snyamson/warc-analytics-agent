@@ -32,6 +32,7 @@ const envSchema = z.object({
 	GITHUB_CLIENT_ID: z.string().optional(),
 	GITHUB_CLIENT_SECRET: z.string().optional(),
 	GITHUB_ALLOWED_USERS: z.string().optional(),
+	DEFAULT_USER_ROLE: z.enum(['admin', 'user']).default('user'),
 
 	FASTAPI_PORT: z.coerce.number().default(8005),
 	APP_VERSION: z.string().default('dev'),

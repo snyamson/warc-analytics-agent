@@ -15,29 +15,29 @@ const PROJECT_PATH = env.NAO_DEFAULT_PROJECT_PATH ?? './';
 const useGithubAuth = !!(env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET);
 
 /**
- * Seeds the database with the test admin user and their project.
- * When GitHub auth is configured, only the org and project are seeded — users sign in via GitHub.
+ * Seeds the database with an admin user, organization, and project.
+ * When GitHub auth is configured, the seed user gets a random password
+ * (users sign in via GitHub instead).
  */
 async function seed() {
 	console.log('Seeding database...');
 
-	const existingUser = useGithubAuth
-		? null
-		: await db.query.user.findFirst({ where: (u, { eq }) => eq(u.email, ADMIN_EMAIL) });
+	const existingUser = await db.query.user.findFirst({ where: (u, { eq }) => eq(u.email, ADMIN_EMAIL) });
 	const existingOrg = await db.query.organization.findFirst({ where: (o, { eq }) => eq(o.slug, ORG_SLUG) });
 	const existingProject = await db.query.project.findFirst({ where: (p, { eq }) => eq(p.path, PROJECT_PATH) });
 
-	if ((existingUser || useGithubAuth) && existingOrg && existingProject) {
+	if (existingUser && existingOrg && existingProject) {
 		console.log('Seed data already present. Skipping.');
 		return;
 	}
 
+	const password = useGithubAuth ? crypto.randomUUID() : ADMIN_PASSWORD;
 	const userId = existingUser?.id ?? crypto.randomUUID();
 	const accountId = crypto.randomUUID();
-	const hashedPassword = await hashPassword(ADMIN_PASSWORD);
+	const hashedPassword = await hashPassword(password);
 
 	await db.transaction(async (tx) => {
-		if (!existingUser && !useGithubAuth) {
+		if (!existingUser) {
 			await tx
 				.insert(s.user)
 				.values({ id: userId, name: ADMIN_NAME, email: ADMIN_EMAIL, emailVerified: true })
@@ -59,13 +59,11 @@ async function seed() {
 			? [existingOrg]
 			: await tx.insert(s.organization).values({ name: ORG_NAME, slug: ORG_SLUG }).returning().execute();
 
-		if (!useGithubAuth) {
-			const existingOrgMember = await tx.query.orgMember.findFirst({
-				where: (m, { and, eq }) => and(eq(m.orgId, org.id), eq(m.userId, userId)),
-			});
-			if (!existingOrgMember) {
-				await tx.insert(s.orgMember).values({ orgId: org.id, userId, role: 'admin' }).execute();
-			}
+		const existingOrgMember = await tx.query.orgMember.findFirst({
+			where: (m, { and, eq }) => and(eq(m.orgId, org.id), eq(m.userId, userId)),
+		});
+		if (!existingOrgMember) {
+			await tx.insert(s.orgMember).values({ orgId: org.id, userId, role: 'admin' }).execute();
 		}
 
 		const [project] = existingProject
@@ -76,13 +74,11 @@ async function seed() {
 					.returning()
 					.execute();
 
-		if (!useGithubAuth) {
-			const existingProjectMember = await tx.query.projectMember.findFirst({
-				where: (m, { and, eq }) => and(eq(m.projectId, project.id), eq(m.userId, userId)),
-			});
-			if (!existingProjectMember) {
-				await tx.insert(s.projectMember).values({ projectId: project.id, userId, role: 'admin' }).execute();
-			}
+		const existingProjectMember = await tx.query.projectMember.findFirst({
+			where: (m, { and, eq }) => and(eq(m.projectId, project.id), eq(m.userId, userId)),
+		});
+		if (!existingProjectMember) {
+			await tx.insert(s.projectMember).values({ projectId: project.id, userId, role: 'admin' }).execute();
 		}
 	});
 
