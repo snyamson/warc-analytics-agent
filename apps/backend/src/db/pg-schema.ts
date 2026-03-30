@@ -155,10 +155,7 @@ export const project = pgTable(
 			.notNull(),
 	},
 	(t) => [
-		check(
-			'local_project_path_required',
-			sql`CASE WHEN ${t.type} = 'local' THEN ${t.path} IS NOT NULL ELSE TRUE END`,
-		),
+		check('local_project_path_required', sql`CASE WHEN "type" = 'local' THEN "path" IS NOT NULL ELSE TRUE END`),
 		index('project_orgId_idx').on(t.orgId),
 	],
 );
@@ -266,6 +263,10 @@ export const messagePart = pgTable(
 		// provider metadata columns
 		toolProviderMetadata: jsonb('tool_provider_metadata').$type<ProviderMetadata>(),
 		providerMetadata: jsonb('provider_metadata').$type<ProviderMetadata>(),
+
+		// file/image columns
+		mediaType: text('media_type'),
+		imageId: text('image_id').references(() => messageImage.id, { onDelete: 'set null' }),
 	},
 	(t) => [
 		index('parts_message_id_idx').on(t.messageId),
@@ -281,6 +282,10 @@ export const messagePart = pgTable(
 		check(
 			'tool_call_fields_required',
 			sql`CASE WHEN ${t.type} LIKE 'tool-%' THEN ${t.toolCallId} IS NOT NULL AND ${t.toolState} IS NOT NULL ELSE TRUE END`,
+		),
+		check(
+			'file_fields_required',
+			sql`CASE WHEN ${t.type} = 'file' THEN ${t.mediaType} IS NOT NULL AND ${t.imageId} IS NOT NULL ELSE TRUE END`,
 		),
 	],
 );
@@ -543,6 +548,15 @@ export const llmInference = pgTable(
 		index('llm_inference_type_idx').on(t.type),
 	],
 );
+
+export const messageImage = pgTable('message_image', {
+	id: text('id')
+		.$defaultFn(() => crypto.randomUUID())
+		.primaryKey(),
+	data: text('data').notNull(),
+	mediaType: text('media_type').notNull(),
+	createdAt: timestamp('created_at').defaultNow().notNull(),
+});
 
 export const message_part_chart_image = pgTable('chart_image', {
 	id: text('id')
