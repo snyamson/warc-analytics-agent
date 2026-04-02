@@ -1,4 +1,5 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef, useState, useSyncExternalStore } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { ShareStoryDialog } from '../share-dialog.story';
 import { StoryEditor } from './story-editor';
 import { LiveStorySettingsDialog } from './live-story-settings-dialog';
@@ -18,18 +19,43 @@ import { useStoryViewerVersions } from './hooks/use-story-viewer-versions';
 import { useStoryViewerViewMode } from './hooks/use-story-viewer-view-mode';
 import type { Editor as TiptapEditor } from '@tiptap/react';
 import { useSidePanel } from '@/contexts/side-panel';
+import { ReadonlyAgentMessagesProvider, useOptionalAgentContext } from '@/contexts/agent.provider';
+import { Spinner } from '@/components/ui/spinner';
+import { chatActivityStore } from '@/stores/chat-activity';
+import { trpc } from '@/main';
 
 interface StoryViewerProps {
 	chatId: string;
 	storyId: string;
+	isReadonlyMode?: boolean;
 }
 
-export function StoryViewer({ chatId, storyId }: StoryViewerProps) {
+export function StoryViewer({ chatId, storyId, isReadonlyMode: readonlyProp }: StoryViewerProps) {
 	const tiptapEditorRef = useRef<TiptapEditor | null>(null);
 	const scrollContainerRef = useRef<HTMLDivElement | null>(null);
-	const { close: closeSidePanel, isReadonlyMode } = useSidePanel();
+	const { close: closeSidePanel, isReadonlyMode: contextReadonlyMode } = useSidePanel();
+	const isReadonlyMode = readonlyProp ?? contextReadonlyMode;
 	const { viewMode, setViewMode } = useStoryViewerViewMode();
-	const { allStories, draftStory, isAgentRunning } = useStoryViewerAgentState(storyId);
+
+	const outerAgent = useOptionalAgentContext();
+	const outerAgentHasCorrectChat = outerAgent?.chatId === chatId;
+	const chatQuery = useQuery({
+		...trpc.chat.get.queryOptions({ chatId }),
+		staleTime: Infinity,
+		enabled: !outerAgentHasCorrectChat,
+	});
+	const chatMessages = outerAgentHasCorrectChat ? undefined : (chatQuery.data?.messages ?? null);
+
+	const isChatAgentRunning = useSyncExternalStore(
+		useCallback((cb) => chatActivityStore.subscribe(chatId, cb), [chatId]),
+		useCallback(() => chatActivityStore.getActivity(chatId).running, [chatId]),
+	);
+
+	const { allStories, draftStory, isAgentRunning } = useStoryViewerAgentState(
+		storyId,
+		chatMessages,
+		isChatAgentRunning,
+	);
 	const resolvedStoryId = draftStory?.id ?? storyId;
 	const {
 		versions,
@@ -40,7 +66,7 @@ export function StoryViewer({ chatId, storyId }: StoryViewerProps) {
 		isViewingLatest,
 		goToPreviousVersion,
 		goToNextVersion,
-	} = useStoryViewerVersions({ chatId, storyId: resolvedStoryId, isAgentRunning });
+	} = useStoryViewerVersions({ chatId, storyId: resolvedStoryId, isAgentRunning, isReadonlyMode });
 	const { storyTitle, storyCode, queryData, cachedAt } = useStoryViewerContent({
 		storyId,
 		resolvedStoryId,
@@ -48,6 +74,7 @@ export function StoryViewer({ chatId, storyId }: StoryViewerProps) {
 		draftStory,
 		currentVersion,
 		storedTitle,
+		isReadonlyMode,
 	});
 	const { handleSave, handleRestore } = useStoryViewerVersionActions({
 		chatId,
@@ -79,8 +106,8 @@ export function StoryViewer({ chatId, storyId }: StoryViewerProps) {
 	const handleOpenLiveSettings = useCallback(() => setIsLiveSettingsOpen(true), []);
 
 	const renderStoryViewer = useCallback(
-		(nextStoryId: string) => <StoryViewer chatId={chatId} storyId={nextStoryId} />,
-		[chatId],
+		(nextStoryId: string) => <StoryViewer chatId={chatId} storyId={nextStoryId} isReadonlyMode={readonlyProp} />,
+		[chatId, readonlyProp],
 	);
 	const { switchStory } = useStoryViewerSwitchStory({ renderStoryViewer });
 
@@ -92,6 +119,13 @@ export function StoryViewer({ chatId, storyId }: StoryViewerProps) {
 	});
 
 	if (!storyCode) {
+		if (chatQuery.isLoading) {
+			return (
+				<div className='flex h-full items-center justify-center'>
+					<Spinner />
+				</div>
+			);
+		}
 		return (
 			<div className='flex h-full items-center justify-center text-muted-foreground text-sm'>
 				{isAgentRunning ? 'Waiting for story stream...' : 'No Story content available.'}
@@ -99,7 +133,7 @@ export function StoryViewer({ chatId, storyId }: StoryViewerProps) {
 		);
 	}
 
-	return (
+	const content = (
 		<div className='flex h-full flex-col'>
 			<StoryHeader
 				title={storyTitle}
@@ -164,4 +198,10 @@ export function StoryViewer({ chatId, storyId }: StoryViewerProps) {
 			/>
 		</div>
 	);
+
+	if (!chatMessages) {
+		return content;
+	}
+
+	return <ReadonlyAgentMessagesProvider messages={chatMessages}>{content}</ReadonlyAgentMessagesProvider>;
 }

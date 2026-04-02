@@ -20,7 +20,7 @@ import { CACHE_1H, CACHE_5M, LLM_PROVIDERS, ProviderModelResult } from '../agent
 import { getTools } from '../agents/tools';
 import { createWebSearchTools } from '../agents/tools/web-search';
 import { getConnections, getTableColumnsContent, getUserRules } from '../agents/user-rules';
-import { MessagingProviderSystemPrompt, SystemPrompt } from '../components/ai';
+import { ChatForkContextPrompt, MessagingProviderSystemPrompt, SystemPrompt } from '../components/ai';
 import { DBChat } from '../db/abstractSchema';
 import { renderToMarkdown } from '../lib/markdown';
 import * as chatQueries from '../queries/chat.queries';
@@ -29,7 +29,15 @@ import * as projectQueries from '../queries/project.queries';
 import * as llmConfigQueries from '../queries/project-llm-config.queries';
 import * as storyQueries from '../queries/story.queries';
 import { AgentSettings } from '../types/agent-settings';
-import { AgentTools, Mention, MessageCustomDataParts, TokenCost, TokenUsage, UIMessage } from '../types/chat';
+import {
+	AgentTools,
+	ForkMetadata,
+	Mention,
+	MessageCustomDataParts,
+	TokenCost,
+	TokenUsage,
+	UIMessage,
+} from '../types/chat';
 import { LlmProvider } from '../types/llm';
 import { Provider } from '../types/messaging-provider';
 import { ToolContext } from '../types/tools';
@@ -66,7 +74,9 @@ export interface AgentRunResult {
 	}>;
 }
 
-export type AgentChat = Pick<DBChat, 'id' | 'projectId' | 'userId'>;
+export type AgentChat = Pick<DBChat, 'id' | 'projectId' | 'userId'> & {
+	forkMetadata?: ForkMetadata | null;
+};
 
 export class AgentService {
 	private _agents = new Map<string, AgentManager>();
@@ -334,9 +344,14 @@ class AgentManager {
 		const connections = getConnections();
 		const skills = skillService.getSkills();
 		const basePrompt = renderToMarkdown(SystemPrompt({ memories, userRules, connections, skills, timezone }));
-		const systemPrompt = provider
+		const renderedPrompt = provider
 			? renderToMarkdown(MessagingProviderSystemPrompt({ basePrompt, provider, chatUrl }))
 			: basePrompt;
+		const systemPrompt = this.chat.forkMetadata
+			? renderToMarkdown(
+					ChatForkContextPrompt({ basePrompt: renderedPrompt, forkMetadata: this.chat.forkMetadata }),
+				)
+			: renderedPrompt;
 
 		const systemMessage: Omit<UIMessage, 'id'> = {
 			role: 'system',
